@@ -65,7 +65,7 @@ fn make_noise(index: u32, workers: &Workers) -> Noise {
 const BLOCK_SIZE: usize = 512; // 32 * 16
 
 pub fn sha1(_message: &str) -> (u32, u32, u32, u32, u32) {
-    let mut message = String::from("abc");
+    let message = String::from("abc");
 
     let mut hash_state: [u32; 5] = [
         0x6745_2301,
@@ -75,32 +75,9 @@ pub fn sha1(_message: &str) -> (u32, u32, u32, u32, u32) {
         0xC3D2_E1F0,
     ];
 
-    message += "1";
-
-    // message_length... is a 64 bit quantity
-    // + 1 for the '1'
-    // + 1 for the added length onto here
-    let message_length_in_bytes: u64 = (message.len() as u64) / 4 + 1 + 1;
-    let len_as_bits = format!("{:064b}", message_length_in_bytes)
-        .chars()
-        .collect::<String>();
-
-    assert_eq!(64, len_as_bits.len());
-
-    while BLOCK_SIZE - (message.len() % BLOCK_SIZE) != 64 {
-        message += "0";
-    }
-
-    message += &len_as_bits;
-
-    // assert_eq!(0, message.len() % BLOCK_SIZE);
-    println!("{}", message);
-    let as_bits = to_bits(&message);
-    // 11000010110001001100011100000000000000000000011000
-    //011000010110001001100011
-    //0011000100110000001
-    println!("{}", as_bits.iter().collect::<String>());
-    let blocks = as_bits.chunks_exact(BLOCK_SIZE);
+    let as_bits = preprocess(message);
+    let bit_blocks = as_bits.chars().collect::<Vec<char>>();
+    let blocks = bit_blocks.chunks_exact(BLOCK_SIZE);
 
     for chunk in blocks {
         let u32_pieces: Vec<&[char]> = chunk.chunks_exact(32).collect();
@@ -167,10 +144,22 @@ fn calc_zero_padding(length: usize) -> usize {
     (BLOCK_SIZE - LENGTH_OF_LENGTH_STR - length - 1) % BLOCK_SIZE
 }
 
-fn preprocess(mut message: String) {
-    let as_bits = to_bits(&message);
+fn preprocess(raw_message: String) -> String {
+    let as_bits = to_bits(&raw_message);
     let length = as_bits.len();
     let number_of_zeroes = calc_zero_padding(length);
+    let zeroes = "0".repeat(number_of_zeroes);
+
+    let length_as_64bit_str = format!("{:064b}", length);
+
+    let mut message: String = as_bits.iter().collect::<String>();
+    message += "1";
+    message += &zeroes;
+    message += &length_as_64bit_str;
+
+    assert_eq!(0, message.len() % BLOCK_SIZE);
+
+    message
 }
 
 #[cfg(test)]
@@ -185,6 +174,20 @@ mod tests {
     }
 
     #[test]
+    fn test_preprocess() {
+        println!("{:064b}", 24);
+        let message = "abc";
+        let rest = String::from("01100001")
+            + &String::from("01100010")
+            + &String::from("01100011")
+            + &String::from("1")
+            + &"0".repeat(423)
+            + &String::from("0000000000000000000000000000000000000000000000000000000000011000");
+
+        assert_eq!(rest, preprocess(message.to_string()));
+    }
+
+    #[test]
     fn test_num_zeros() {
         let message = "abc";
         let length = to_bits(&message).len();
@@ -193,18 +196,16 @@ mod tests {
 
     #[test]
     fn it_works() {
-        // let input = "abc";
-        // let output = sha1(input);
+        let input = "abc";
+        let output = sha1(input);
 
-        // println!("{:#?}", output);
+        println!("{:#?}", output);
 
-        // let (a, b, c, d, e) = output;
-        // println!("{:08x} {:08x} {:08x} {:08x} {:08x}", a, b, c, d, e);
+        let (a, b, c, d, e) = output;
 
-        // // this is not necessarily correct, but characterizes this state.
-        // assert_eq!(
-        //     "481c469ee2e6dddeccff0bf8a876cb04639efb",
-        //     format!("{:x}{:x}{:x}{:x}{:x}", a, b, c, d, e)
-        // );
+        assert_eq!(
+            "a9993e36 4706816a ba3e2571 7850c26c 9cd0d89d",
+            format!("{:08x} {:08x} {:08x} {:08x} {:08x}", a, b, c, d, e)
+        );
     }
 }
