@@ -6,11 +6,11 @@ fn calc_zero_padding(length: usize) -> usize {
 }
 
 const K: [u32; 4] = [0x5A82_7999, 0x6ED9_EBA1, 0x8F1B_BCDC, 0xCA62_C1D6];
-fn get_k(index: u32) -> u32 {
+fn get_k(index: usize) -> u32 {
     K[(index / 20) as usize]
 }
 
-fn calculate_f(index: u32, b: u32, c: u32, d: u32) -> u32 {
+fn calculate_f(index: usize, b: u32, c: u32, d: u32) -> u32 {
     match index {
         20..=39 | 60..=79 => b ^ c ^ d,
         0..=19 => (b & c) | ((!b) & d),
@@ -19,29 +19,35 @@ fn calculate_f(index: u32, b: u32, c: u32, d: u32) -> u32 {
     }
 }
 
+// chunk : &[char]
+// so a slice of that is &[&[char]]
 pub fn get_upcoming_block(chunk: &[char]) -> Vec<u32> {
-    let block_units: Vec<&[char]> = chunk.chunks_exact(32).collect();
+    // chunks_exact is on a slice and returns slices
+    // but then we gather those up into a vec
+    // which is how we end up with Vec<&[char]>
+    let mut block_units: Vec<u32> = chunk
+        .chunks_exact(32)
+        .map(|block| {
+            let int_bits = block.iter().collect::<String>();
+            u32::from_str_radix(&int_bits, 2).unwrap()
+        })
+        .collect();
+
+    assert_eq!(16, block_units.len());
+
     let mut upcoming_block: Vec<u32> = Vec::with_capacity(80);
 
-    for index in 0..80 {
-        match index {
-            0..=15 => {
-                // gather ye bits while ye may
-                let int_bits = block_units[index].iter().collect::<String>();
-                let int_value = u32::from_str_radix(&int_bits, 2).unwrap();
+    upcoming_block.append(&mut block_units);
 
-                upcoming_block.push(int_value);
-            }
-            _ => {
-                let term: u32 = (upcoming_block[index - 3]
-                    ^ upcoming_block[index - 8]
-                    ^ upcoming_block[index - 14]
-                    ^ upcoming_block[index - 16])
-                    .rotate_left(1);
+    for index in 16..80 {
+        // -3, -8, -14, -16
+        let term: u32 = (upcoming_block[index - 3]
+            ^ upcoming_block[index - 8]
+            ^ upcoming_block[index - 14]
+            ^ upcoming_block[index - 16])
+            .rotate_left(1);
 
-                upcoming_block.push(term);
-            }
-        }
+        upcoming_block.push(term);
     }
 
     upcoming_block
@@ -68,6 +74,12 @@ pub fn sha1(raw_message: &str) -> String {
     /*
        Each chunk = 512-bit unit of the preprocessed message.
        Each chunk is a set 16 words -- each word being 32 bits.
+
+       chunks_exact yields slices, which is why we end up in Slice Hell
+
+       blocks :  Vec<char>
+       chunk <- blocks.chunks_exact  : yields &[char]
+       so chunk is a &[char] -- a char slice
     */
     for chunk in blocks.chunks_exact(BLOCK_SIZE) {
         let upcoming_block: Vec<u32> = get_upcoming_block(chunk);
@@ -84,18 +96,16 @@ pub fn sha1(raw_message: &str) -> String {
         let mut d: u32 = hash_state[3];
         let mut e: u32 = hash_state[4];
 
-        for index in 0..80 {
-            let current_item = upcoming_block[index as usize];
+        for (index, current_item) in upcoming_block.iter().enumerate() {
+            let constant_k = get_k(index); // <- independent
 
-            let constant_k = get_k(index);
             let f_value = calculate_f(index, b, c, d);
-
             let temp = a
                 .rotate_left(5)
                 .wrapping_add(f_value)
                 .wrapping_add(e)
                 .wrapping_add(constant_k)
-                .wrapping_add(current_item);
+                .wrapping_add(*current_item); // independent
 
             e = d;
             d = c;
@@ -120,7 +130,7 @@ pub fn sha1(raw_message: &str) -> String {
 
     hash_state
         .iter()
-        .flat_map(|value| format!("{:08x}", value).chars().collect::<Vec<char>>())
+        .flat_map(|value| to_hex_string(*value))
         .collect::<String>()
 }
 
@@ -174,8 +184,16 @@ fn to_bits(input: &str) -> Vec<char> {
     input
         .as_bytes()
         .iter()
-        .flat_map(|byte| format!("{:08b}", byte).chars().collect::<Vec<char>>())
+        .flat_map(|byte| to_bit_string(*byte))
         .collect::<Vec<char>>()
+}
+
+fn to_hex_string(value: u32) -> Vec<char> {
+    format!("{:08x}", value).chars().collect::<Vec<char>>()
+}
+
+fn to_bit_string(byte: u8) -> Vec<char> {
+    format!("{:08b}", byte).chars().collect::<Vec<char>>()
 }
 
 #[cfg(test)]
