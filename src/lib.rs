@@ -72,9 +72,9 @@ pub fn sha1(message: &str) -> (u32, u32, u32, u32, u32) {
         let mut f: u32;
         let mut k: u32;
 
-        for index in 0..79 {
+        for index in 0..80 {
             match index {
-                _ if index <= 29 => {
+                _ if index <= 19 => {
                     //    f = (b and c) or ((not b) and d)
                     f = (b & c) | ((!b) & d);
                     k = 0x5A82_7999;
