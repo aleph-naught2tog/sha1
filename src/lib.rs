@@ -1,18 +1,9 @@
-use std::convert::TryInto;
-
 fn to_bits(input: &str) -> Vec<char> {
     input
         .as_bytes()
         .iter()
         .flat_map(|byte: &u8| format!("{:08b}", byte).chars().collect::<Vec<char>>())
         .collect::<Vec<char>>()
-}
-
-pub fn from_binary(word: &[char]) -> u32 {
-    isize::from_str_radix(&word.iter().cloned().collect::<String>(), 2)
-        .unwrap()
-        .try_into()
-        .unwrap()
 }
 
 // these are all temp variables used for computation
@@ -64,6 +55,33 @@ fn make_noise(index: u32, workers: &Workers) -> Noise {
 
 const BLOCK_SIZE: usize = 512; // 32 * 16
 
+pub fn get_schedule(chunk: &[char]) -> Vec<u32> {
+    let message_blocks: Vec<&[char]> = chunk.chunks_exact(32).collect();
+    let mut schedule: Vec<u32> = Vec::with_capacity(80);
+
+    for index in 0..80 {
+        match index {
+            _ if index <= 15 => {
+                let num = message_blocks[index];
+                let w = num.iter().collect::<String>();
+                let as_int = u32::from_str_radix(&w, 2).unwrap();
+                schedule.push(as_int);
+            }
+            _ => {
+                let term: u32 = (schedule[index - 3]
+                    ^ schedule[index - 8]
+                    ^ schedule[index - 14]
+                    ^ schedule[index - 16])
+                    .rotate_left(1);
+
+                schedule.push(term);
+            }
+        }
+    }
+
+    schedule
+}
+
 pub fn sha1(_message: &str) -> (u32, u32, u32, u32, u32) {
     let message = String::from("abc");
 
@@ -75,25 +93,18 @@ pub fn sha1(_message: &str) -> (u32, u32, u32, u32, u32) {
         0xC3D2_E1F0,
     ];
 
-    let as_bits = preprocess(message);
-    let bit_blocks = as_bits.chars().collect::<Vec<char>>();
+    let bit_blocks = preprocess(message).chars().collect::<Vec<char>>();
     let blocks = bit_blocks.chunks_exact(BLOCK_SIZE);
 
+    /*
+       Each chunk = 512-bit unit of the preprocessed message.
+       Each chunk is a set 16 words -- each word being 32 bits.
+    */
     for chunk in blocks {
-        let u32_pieces: Vec<&[char]> = chunk.chunks_exact(32).collect();
-        let mut values: Vec<u32> = Vec::with_capacity(80);
+        let schedule: Vec<u32> = get_schedule(chunk);
 
-        for num in u32_pieces {
-            let as_int = from_binary(num);
-            values.push(as_int);
-        }
-
-        for index in 16..80 {
-            let term: u32 =
-                (values[index - 3] ^ values[index - 8] ^ values[index - 14] ^ values[index - 16])
-                    .rotate_left(1);
-
-            values.push(term);
+        for v in 0..16 {
+            println!("{:x}", schedule[v]);
         }
 
         let mut workers = Workers {
@@ -104,7 +115,7 @@ pub fn sha1(_message: &str) -> (u32, u32, u32, u32, u32) {
             e: hash_state[4],
         };
 
-        for index in 0..79 {
+        for index in 0..80 {
             let Noise { f, k } = make_noise(index, &workers);
 
             let temp = workers
@@ -113,20 +124,25 @@ pub fn sha1(_message: &str) -> (u32, u32, u32, u32, u32) {
                 .wrapping_add(f)
                 .wrapping_add(workers.e)
                 .wrapping_add(k)
-                .wrapping_add(values[index as usize]);
+                .wrapping_add(schedule[index as usize]);
 
             workers.e = workers.d;
             workers.d = workers.c;
             workers.c = workers.b.rotate_left(30);
             workers.b = workers.a;
             workers.a = temp;
+
+            println!(
+                "t= {:>2}: {:08X} {:08X} {:08X} {:08X} {:08X}",
+                index, workers.a, workers.b, workers.c, workers.d, workers.e
+            )
         }
 
-        hash_state[0] = hash_state[0].wrapping_add(workers.a);
-        hash_state[1] = hash_state[1].wrapping_add(workers.b);
-        hash_state[2] = hash_state[2].wrapping_add(workers.c);
-        hash_state[3] = hash_state[3].wrapping_add(workers.d);
-        hash_state[4] = hash_state[4].wrapping_add(workers.e);
+        hash_state[0] = workers.a.wrapping_add(hash_state[0]);
+        hash_state[1] = workers.b.wrapping_add(hash_state[1]);
+        hash_state[2] = workers.c.wrapping_add(hash_state[2]);
+        hash_state[3] = workers.d.wrapping_add(hash_state[3]);
+        hash_state[4] = workers.e.wrapping_add(hash_state[4]);
     }
 
     (
