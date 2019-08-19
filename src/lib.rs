@@ -1,7 +1,7 @@
 const BLOCK_SIZE: usize = 512; // 32 * 16
 const LENGTH_OF_LENGTH_STR: usize = 64;
 
-const CONSTANTS: [u32; 4] = [0x5A82_7999, 0x6ED9_EBA1, 0x8F1B_BCDC, 0xCA62_C1D6];
+const K: [u32; 4] = [0x5A82_7999, 0x6ED9_EBA1, 0x8F1B_BCDC, 0xCA62_C1D6];
 
 fn to_bits(input: &str) -> Vec<char> {
     input
@@ -11,38 +11,13 @@ fn to_bits(input: &str) -> Vec<char> {
         .collect::<Vec<char>>()
 }
 
-// these are all temp variables used for computation
-struct WorkingVariables {
-    a: u32,
-    b: u32,
-    c: u32,
-    d: u32,
-    e: u32,
-}
-
-// these only get set within the loop based on the index
-struct IndexBasedNoise {
-    f: u32,
-    k: u32,
-}
-
-fn make_noise(index: u32, workers: &WorkingVariables) -> IndexBasedNoise {
-    let WorkingVariables { b, c, d, .. } = workers;
-    let constant = CONSTANTS[(index / 20) as usize];
+fn make_noise(index: u32, b: u32, c: u32, d: u32) -> (u32, u32) {
+    let constant = K[(index / 20) as usize];
 
     match index {
-        20..=39 | 60..=79 => IndexBasedNoise {
-            f: b ^ c ^ d,
-            k: constant,
-        },
-        0..=19 => IndexBasedNoise {
-            f: (b & c) | ((!b) & d),
-            k: constant,
-        },
-        40..=59 => IndexBasedNoise {
-            f: (b & c) | (b & d) | (c & d),
-            k: constant,
-        },
+        20..=39 | 60..=79 => (b ^ c ^ d, constant),
+        0..=19 => ((b & c) | ((!b) & d), constant),
+        40..=59 => ((b & c) | (b & d) | (c & d), constant),
         _ => panic!("Rust broke..."),
     }
 }
@@ -81,13 +56,13 @@ pub fn get_schedule(chunk: &[char]) -> Vec<u32> {
 pub fn sha1(raw_message: &str) -> (u32, u32, u32, u32, u32) {
     let should_debug = std::env::var("SHOULD_DEBUG").is_ok();
 
-    let mut hash_state: [u32; 5] = [
+    let mut hash_state: (u32, u32, u32, u32, u32) = (
         0x6745_2301,
         0xEFCD_AB89,
         0x98BA_DCFE,
         0x1032_5476,
         0xC3D2_E1F0,
-    ];
+    );
 
     let message = preprocess(raw_message.to_string());
     let blocks = message.chars().collect::<Vec<char>>();
@@ -105,53 +80,44 @@ pub fn sha1(raw_message: &str) -> (u32, u32, u32, u32, u32) {
             }
         }
 
-        let mut workers = WorkingVariables {
-            a: hash_state[0],
-            b: hash_state[1],
-            c: hash_state[2],
-            d: hash_state[3],
-            e: hash_state[4],
-        };
+        let mut a: u32 = hash_state.0;
+        let mut b: u32 = hash_state.1;
+        let mut c: u32 = hash_state.2;
+        let mut d: u32 = hash_state.3;
+        let mut e: u32 = hash_state.4;
 
         for index in 0..80 {
-            let IndexBasedNoise { f, k } = make_noise(index, &workers);
+            let (f, k) = make_noise(index, b, c, d);
 
-            let temp = workers
-                .a
+            let temp = a
                 .rotate_left(5)
                 .wrapping_add(f)
-                .wrapping_add(workers.e)
+                .wrapping_add(e)
                 .wrapping_add(k)
                 .wrapping_add(schedule[index as usize]);
 
-            workers.e = workers.d;
-            workers.d = workers.c;
-            workers.c = workers.b.rotate_left(30);
-            workers.b = workers.a;
-            workers.a = temp;
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = temp;
 
             if should_debug {
                 println!(
                     "t={:>2}: {:08X} {:08X} {:08X} {:08X} {:08X}",
-                    index, workers.a, workers.b, workers.c, workers.d, workers.e
+                    index, a, b, c, d, e
                 )
             }
         }
 
-        hash_state[0] = workers.a.wrapping_add(hash_state[0]);
-        hash_state[1] = workers.b.wrapping_add(hash_state[1]);
-        hash_state[2] = workers.c.wrapping_add(hash_state[2]);
-        hash_state[3] = workers.d.wrapping_add(hash_state[3]);
-        hash_state[4] = workers.e.wrapping_add(hash_state[4]);
+        hash_state.0 = a.wrapping_add(hash_state.0);
+        hash_state.1 = b.wrapping_add(hash_state.1);
+        hash_state.2 = c.wrapping_add(hash_state.2);
+        hash_state.3 = d.wrapping_add(hash_state.3);
+        hash_state.4 = e.wrapping_add(hash_state.4);
     }
 
-    (
-        hash_state[0],
-        hash_state[1],
-        hash_state[2],
-        hash_state[3],
-        hash_state[4],
-    )
+    hash_state
 }
 
 fn calc_zero_padding(length: usize) -> usize {
