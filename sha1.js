@@ -60,37 +60,40 @@ class Sha1 {
     console.log(msg);
 
     // convert string msg into 512-bit/16-integer blocks arrays of ints [§5.2.1]
-    const messageLengthInBytes = msg.length / 4 + 2; // length (in 32-bit integers) of msg + ‘1’ + appended length
+    const lengthInBytes = msg.length;
+    const messageLengthInBytes = lengthInBytes / 4 + 2; // length (in 32-bit integers) of msg + ‘1’ + appended length
     console.log(messageLengthInBytes);
     const numberOfBlocks = Math.ceil(messageLengthInBytes / 16); // number of 16-integer-blocks required to hold 'l' ints
     console.log(numberOfBlocks);
-    const M = new Array(numberOfBlocks);
+    const initialArray = new Array(numberOfBlocks);
 
-    for (let i = 0; i < numberOfBlocks; i++) {
-      M[i] = new Array(16);
-      for (let j = 0; j < 16; j++) {
+    for (let i = 0; i < numberOfBlocks; i+= 1) {
+      initialArray[i] = new Array(16);
+      for (let j = 0; j < 16; j+= 1) {
         // encode 4 chars per integer, big-endian encoding
-        M[i][j] =
+        initialArray[i][j] =
           (msg.charCodeAt(i * 64 + j * 4 + 0) << 24) |
           (msg.charCodeAt(i * 64 + j * 4 + 1) << 16) |
           (msg.charCodeAt(i * 64 + j * 4 + 2) << 8) |
           (msg.charCodeAt(i * 64 + j * 4 + 3) << 0);
-      } // note running off the end of msg is ok 'cos bitwise ops on NaN return 0
+      } // note running off msg is ok 'cos bitwise ops on NaN return 0
     }
     // add length (in bits) into final pair of 32-bit integers (big-endian) [§5.1.1]
     // note: most significant word would be (len-1)*8 >>> 32, but since JS converts
     // bitwise-op args to 32 bits, we need to simulate this by arithmetic operators
-    M[numberOfBlocks - 1][14] = ((msg.length - 1) * 8) / Math.pow(2, 32);
-    M[numberOfBlocks - 1][14] = Math.floor(M[numberOfBlocks - 1][14]);
-    M[numberOfBlocks - 1][15] = ((msg.length - 1) * 8) & 0xffffffff;
+    initialArray[numberOfBlocks - 1][14] = ((msg.length - 1) * 8) / Math.pow(2, 32);
+    initialArray[numberOfBlocks - 1][14] = Math.floor(initialArray[numberOfBlocks - 1][14]);
+    initialArray[numberOfBlocks - 1][15] = ((msg.length - 1) * 8) & 0xffffffff;
 
     // HASH COMPUTATION [§6.1.2]
+    let q = initialArray.map(arr => arr.map(a => a.toString(2)));
+    console.log(q.flat(1).join(''))
 
     for (let i = 0; i < numberOfBlocks; i++) {
       const W = new Array(80);
 
       // 1 - prepare message schedule 'W'
-      for (let t = 0; t < 16; t++) W[t] = M[i][t];
+      for (let t = 0; t < 16; t++) W[t] = initialArray[i][t];
       for (let t = 16; t < 80; t++)
         W[t] = Sha1.ROTL(W[t - 3] ^ W[t - 8] ^ W[t - 14] ^ W[t - 16], 1);
 
