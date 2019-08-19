@@ -1,3 +1,8 @@
+const BLOCK_SIZE: usize = 512; // 32 * 16
+const LENGTH_OF_LENGTH_STR: usize = 64;
+
+const CONSTANTS: [u32; 4] = [0x5A82_7999, 0x6ED9_EBA1, 0x8F1B_BCDC, 0xCA62_C1D6];
+
 fn to_bits(input: &str) -> Vec<char> {
     input
         .as_bytes()
@@ -22,49 +27,53 @@ struct Noise {
 }
 
 fn make_noise(index: u32, workers: &Workers) -> Noise {
-    let Workers { b, c, d, .. } = workers;
+    let fns: [Box<dyn Fn(u32, u32, u32) -> u32>; 4] = [
+        Box::new(|b, c, d| -> u32 { (b & c) | ((!b) & d) }),
+        Box::new(|b, c, d| -> u32 { b ^ c ^ d }),
+        Box::new(|b, c, d| -> u32 { (b & c) | (b & d) | (c & d) }),
+        Box::new(|b, c, d| -> u32 { b ^ c ^ d }),
+    ];
 
-    match index {
-        _ if index <= 29 => {
+    let Workers { b, c, d, .. } = workers;
+    let k = CONSTANTS[(index / 20) as usize];
+    let f = fns[(index / 20) as usize](*b, *c, *d);
+    Noise { f, k }
+    /* match index {
+        _ if index <= 19 => {
             //    f = (b and c) or ((not b) and d)
             let f = (b & c) | ((!b) & d);
-            let k = 0x5A82_7999;
             Noise { f, k }
         }
         _ if index <= 39 => {
             // f = b xor c xor d
             let f = b ^ c ^ d;
-            let k = 0x6ED9_EBA1;
             Noise { f, k }
         }
         _ if index <= 59 => {
             // f = (b and c) or (b and d) or (c and d)
             let f = (b & c) | (b & d) | (c & d);
-            let k = 0x8F1B_BCDC;
             Noise { f, k }
         }
         _ if index <= 79 => {
             // f = b xor c xor d
             let f = b ^ c ^ d;
-            let k = 0xCA62_C1D6;
             Noise { f, k }
         }
         _ => panic!("Rust broke..."),
-    }
+    } */
 }
 
-const BLOCK_SIZE: usize = 512; // 32 * 16
-
 pub fn get_schedule(chunk: &[char]) -> Vec<u32> {
-    let message_blocks: Vec<&[char]> = chunk.chunks_exact(32).collect();
+    let block_units: Vec<&[char]> = chunk.chunks_exact(32).collect();
     let mut schedule: Vec<u32> = Vec::with_capacity(80);
 
     for index in 0..80 {
         match index {
             _ if index <= 15 => {
-                let num = message_blocks[index];
-                let w = num.iter().collect::<String>();
-                let as_int = u32::from_str_radix(&w, 2).unwrap();
+                // gather ye bits while ye may
+                let bits_of_int = block_units[index].iter().collect::<String>();
+                let as_int = u32::from_str_radix(&bits_of_int, 2).unwrap();
+
                 schedule.push(as_int);
             }
             _ => {
@@ -82,8 +91,11 @@ pub fn get_schedule(chunk: &[char]) -> Vec<u32> {
     schedule
 }
 
-pub fn sha1(_message: &str) -> (u32, u32, u32, u32, u32) {
-    let message = String::from("abc");
+// * message length is defined as a u64
+// * all other variables are u32
+// * the final result itself is 160-bits aka 5 u32 values
+pub fn sha1(raw_message: &str) -> (u32, u32, u32, u32, u32) {
+    let should_debug = std::env::var("SHOULD_DEBUG").is_ok();
 
     let mut hash_state: [u32; 5] = [
         0x6745_2301,
@@ -93,18 +105,20 @@ pub fn sha1(_message: &str) -> (u32, u32, u32, u32, u32) {
         0xC3D2_E1F0,
     ];
 
-    let bit_blocks = preprocess(message).chars().collect::<Vec<char>>();
-    let blocks = bit_blocks.chunks_exact(BLOCK_SIZE);
+    let message = preprocess(raw_message.to_string());
+    let blocks = message.chars().collect::<Vec<char>>();
 
     /*
        Each chunk = 512-bit unit of the preprocessed message.
        Each chunk is a set 16 words -- each word being 32 bits.
     */
-    for chunk in blocks {
+    for chunk in blocks.chunks_exact(BLOCK_SIZE) {
         let schedule: Vec<u32> = get_schedule(chunk);
 
-        for v in 0..16 {
-            println!("{:x}", schedule[v]);
+        if should_debug {
+            for v in &schedule {
+                println!("{:x}", v);
+            }
         }
 
         let mut workers = Workers {
@@ -132,10 +146,12 @@ pub fn sha1(_message: &str) -> (u32, u32, u32, u32, u32) {
             workers.b = workers.a;
             workers.a = temp;
 
-            println!(
-                "t= {:>2}: {:08X} {:08X} {:08X} {:08X} {:08X}",
-                index, workers.a, workers.b, workers.c, workers.d, workers.e
-            )
+            if should_debug {
+                println!(
+                    "t={:>2}: {:08X} {:08X} {:08X} {:08X} {:08X}",
+                    index, workers.a, workers.b, workers.c, workers.d, workers.e
+                )
+            }
         }
 
         hash_state[0] = workers.a.wrapping_add(hash_state[0]);
@@ -154,22 +170,49 @@ pub fn sha1(_message: &str) -> (u32, u32, u32, u32, u32) {
     )
 }
 
-const LENGTH_OF_LENGTH_STR: usize = 64;
-
 fn calc_zero_padding(length: usize) -> usize {
     (BLOCK_SIZE - LENGTH_OF_LENGTH_STR - length - 1) % BLOCK_SIZE
 }
 
+/// The goal with preprocessing the message is to get a series of blocks to
+/// operate on, each of which is 512 bits in length.
+///
+/// The first step is to convert the message itself to a series of bits. That
+/// is, given the string "a" we want to end up with "01100001", which is 97 in
+/// binary. (Why 97? In ASCII, the letter "a" is represented by 97 -- for
+/// example, in JavaScript if you do `String.fromCharCode(97)` you will get "a",
+/// and in languages with `char`s and `int`s, you frequently move back and forth
+/// between `char`s and u8 (8-bit unsigned ints -- so from 0 to 255).)
+///
+/// Second, we get the length of that array of bits, and write it as a 64-bit
+/// int -- meaning we take the length, write it in binary, and lengthen it so it
+/// has the same value but is 64 bits long by adding a bunch of 0s to the start.
+/// What's important about this is that we know it will be 64 bits long --
+/// because we are _making_ it 64 bits long.
+///
+/// Next, we add a "1" to the end of the message -- because the algorithm says
+/// so.
+///
+/// Finally, before we add on the 64-bits telling us how long the message was
+/// originally, we add a ton of zeroes -- enough to make sure that, once we add
+/// that 64-bit length, our whole message is something nicely divisible by 512.
+///
+/// Example:
+/// "abc" -> "01100001 01100010 01100011" (24 bits)
+/// length = 8
+/// length_as_64_bit_str = 63 0's and a 1
+/// number_of_zeroes = 512 - 1 - 64 - length; // 423 zeroes
+/// "01100001 01100010 01100011" + "1" + 423 0s + (63 0s + 1)
 fn preprocess(raw_message: String) -> String {
     let as_bits = to_bits(&raw_message);
-    let length = as_bits.len();
-    let number_of_zeroes = calc_zero_padding(length);
-    let zeroes = "0".repeat(number_of_zeroes);
 
+    let length = as_bits.len();
     let length_as_64bit_str = format!("{:064b}", length);
 
+    let zeroes = "0".repeat(calc_zero_padding(length));
+
     let mut message: String = as_bits.iter().collect::<String>();
-    message += "1";
+    message += "1"; // 'cuz the algorithm says to
     message += &zeroes;
     message += &length_as_64bit_str;
 
@@ -191,7 +234,6 @@ mod tests {
 
     #[test]
     fn test_preprocess() {
-        println!("{:064b}", 24);
         let message = "abc";
         let rest = String::from("01100001")
             + &String::from("01100010")
@@ -215,12 +257,21 @@ mod tests {
         let input = "abc";
         let output = sha1(input);
 
-        println!("{:#?}", output);
-
         let (a, b, c, d, e) = output;
 
         assert_eq!(
             "a9993e36 4706816a ba3e2571 7850c26c 9cd0d89d",
+            format!("{:08x} {:08x} {:08x} {:08x} {:08x}", a, b, c, d, e)
+        );
+    }
+
+    #[test]
+    fn lazy_dog_test() {
+        let input = "The quick brown fox jumps over the lazy dog";
+        let (a, b, c, d, e) = sha1(input);
+
+        assert_eq!(
+            "2fd4e1c6 7a2d28fc ed849ee1 bb76e739 1b93eb12",
             format!("{:08x} {:08x} {:08x} {:08x} {:08x}", a, b, c, d, e)
         );
     }
