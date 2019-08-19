@@ -12,7 +12,7 @@ fn to_bits(input: &str) -> Vec<char> {
 }
 
 // these are all temp variables used for computation
-struct Workers {
+struct WorkingVariables {
     a: u32,
     b: u32,
     c: u32,
@@ -21,46 +21,30 @@ struct Workers {
 }
 
 // these only get set within the loop based on the index
-struct Noise {
+struct IndexBasedNoise {
     f: u32,
     k: u32,
 }
 
-fn make_noise(index: u32, workers: &Workers) -> Noise {
-    let fns: [Box<dyn Fn(u32, u32, u32) -> u32>; 4] = [
-        Box::new(|b, c, d| -> u32 { (b & c) | ((!b) & d) }),
-        Box::new(|b, c, d| -> u32 { b ^ c ^ d }),
-        Box::new(|b, c, d| -> u32 { (b & c) | (b & d) | (c & d) }),
-        Box::new(|b, c, d| -> u32 { b ^ c ^ d }),
-    ];
+fn make_noise(index: u32, workers: &WorkingVariables) -> IndexBasedNoise {
+    let WorkingVariables { b, c, d, .. } = workers;
+    let constant = CONSTANTS[(index / 20) as usize];
 
-    let Workers { b, c, d, .. } = workers;
-    let k = CONSTANTS[(index / 20) as usize];
-    let f = fns[(index / 20) as usize](*b, *c, *d);
-    Noise { f, k }
-    /* match index {
-        _ if index <= 19 => {
-            //    f = (b and c) or ((not b) and d)
-            let f = (b & c) | ((!b) & d);
-            Noise { f, k }
-        }
-        _ if index <= 39 => {
-            // f = b xor c xor d
-            let f = b ^ c ^ d;
-            Noise { f, k }
-        }
-        _ if index <= 59 => {
-            // f = (b and c) or (b and d) or (c and d)
-            let f = (b & c) | (b & d) | (c & d);
-            Noise { f, k }
-        }
-        _ if index <= 79 => {
-            // f = b xor c xor d
-            let f = b ^ c ^ d;
-            Noise { f, k }
-        }
+    match index {
+        20..=39 | 60..=79 => IndexBasedNoise {
+            f: b ^ c ^ d,
+            k: constant,
+        },
+        0..=19 => IndexBasedNoise {
+            f: (b & c) | ((!b) & d),
+            k: constant,
+        },
+        40..=59 => IndexBasedNoise {
+            f: (b & c) | (b & d) | (c & d),
+            k: constant,
+        },
         _ => panic!("Rust broke..."),
-    } */
+    }
 }
 
 pub fn get_schedule(chunk: &[char]) -> Vec<u32> {
@@ -69,12 +53,12 @@ pub fn get_schedule(chunk: &[char]) -> Vec<u32> {
 
     for index in 0..80 {
         match index {
-            _ if index <= 15 => {
+            0..=15 => {
                 // gather ye bits while ye may
-                let bits_of_int = block_units[index].iter().collect::<String>();
-                let as_int = u32::from_str_radix(&bits_of_int, 2).unwrap();
+                let int_bits = block_units[index].iter().collect::<String>();
+                let int_value = u32::from_str_radix(&int_bits, 2).unwrap();
 
-                schedule.push(as_int);
+                schedule.push(int_value);
             }
             _ => {
                 let term: u32 = (schedule[index - 3]
@@ -121,7 +105,7 @@ pub fn sha1(raw_message: &str) -> (u32, u32, u32, u32, u32) {
             }
         }
 
-        let mut workers = Workers {
+        let mut workers = WorkingVariables {
             a: hash_state[0],
             b: hash_state[1],
             c: hash_state[2],
