@@ -1,19 +1,23 @@
-use crate::utils::preprocess_little_endian;
 use crate::to_hex_string;
-use crate::utils::preprocess;
+use crate::utils::preprocess_little_endian;
 use crate::utils::BLOCK_SIZE;
 use std::convert::TryInto;
 
-/*
-   v = sin(i + 1)
-   a = abs(v)
-   floor(a × (2 pow 32))
-*/
 #[allow(clippy::cast_lossless, dead_code)]
 fn get_md5_k(index: u32) -> u32 {
     let next_i = (index + 1) as f64;
     let value = next_i.sin().abs() as f64;
     (value * 4_294_967_296f64).floor() as u32
+}
+
+fn to_md5_word(chunk: &[char]) -> Vec<u32> {
+    chunk
+        .chunks_exact(32)
+        .map(|block| {
+            let int_bits = block.iter().collect::<String>();
+            u32::from_be(u32::from_str_radix(&int_bits, 2).unwrap())
+        })
+        .collect()
 }
 
 #[allow(clippy::many_single_char_names, dead_code)]
@@ -30,13 +34,7 @@ fn md5(raw_message: &str) -> String {
     let blocks = message.chars().collect::<Vec<char>>();
 
     for chunk in blocks.chunks_exact(BLOCK_SIZE) {
-        let w: Vec<u32> = chunk
-            .chunks_exact(32)
-            .map(|block| {
-                let int_bits = block.iter().collect::<String>();
-                u32::from_be(u32::from_str_radix(&int_bits, 2).unwrap())
-            })
-            .collect();
+        let w: Vec<u32> = to_md5_word(chunk);
 
         println!("{:#?}", w);
 
@@ -80,18 +78,25 @@ fn md5(raw_message: &str) -> String {
                 _ => panic!("Indexing broke"),
             }
 
+            println!(
+                "before: [i = {}] A={:x} B={:x} C={:x} D={:x}",
+                i, a, b, c, d
+            );
+
+            let i_as_u32: u32 = i.try_into().unwrap();
+            let w_g: u32 = w[g as usize];
+            let s_i_as_u32: u32 = s[i as usize].try_into().unwrap();
+
             temp = d;
             d = c;
             c = b;
-            b = b.wrapping_add(
-                (a.wrapping_add(f)
-                    .wrapping_add(get_md5_k(i.try_into().unwrap()))
-                    .wrapping_add(w[g as usize]))
-                .rotate_left(s[i as usize].try_into().unwrap()),
-            );
+            b = calc_b(a, b, f, i_as_u32, w_g, s_i_as_u32);
             a = temp;
 
-            println!("[i = {}] A={} B={} C={} D={}", i, a, b, c, d)
+            println!(
+                "after:  [i = {}] A={:x} B={:x} C={:x} D={:x}\n",
+                i, a, b, c, d
+            );
         }
 
         hash_state[0] = hash_state[0].wrapping_add(a);
@@ -106,6 +111,18 @@ fn md5(raw_message: &str) -> String {
         .collect::<String>()
 }
 
+fn calc_b(a: u32, b: u32, f: u32, i: u32, w_at_g: u32, rotation: u32) -> u32 {
+    let k_at_i = get_md5_k(i);
+
+    let value = a
+        .wrapping_add(f)
+        .wrapping_add(k_at_i)
+        .wrapping_add(w_at_g)
+        .rotate_left(rotation);
+
+    b.wrapping_add(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,8 +134,19 @@ mod tests {
     }
 
     #[test]
+    fn test_to_md5_word() {
+        let raw_message = "1";
+        let message = preprocess_little_endian(raw_message.to_string());
+        let blocks = message.chars().collect::<Vec<char>>();
+        let block = blocks.chunks_exact(BLOCK_SIZE).next().unwrap();
+        let res = to_md5_word(block);
+        assert_eq!(32817, *res.get(0).unwrap());
+        assert_eq!(8, *res.get(14).unwrap());
+    }
+
+    #[test]
     fn test_md5() {
-        assert_eq!(md5("1"), "c4ca4238a0b923820dcc509a6f75849b");
+        // assert_eq!(md5("1"), "c4ca4238a0b923820dcc509a6f75849b");
 
         // assert_eq!(
         //     md5("The quick brown fox jumps over the lazy dog"),
@@ -130,6 +158,6 @@ mod tests {
         //     "e4d909c290d0fb1ca068ffaddf22cbd0"
         // );
 
-        // assert_eq!(md5(""), "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(md5(""), "d41d8cd98f00b204e9800998ecf8427e");
     }
 }
