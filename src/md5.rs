@@ -121,11 +121,6 @@ fn md5(raw_message: &str) -> String {
     for word in message_as_chars.chunks_exact(BLOCK_SIZE).map(&to_md5_word) {
         assert_eq!(16, word.len());
 
-        // let mut a_val: u32 = hash_state[0];
-        // let mut b_val: u32 = hash_state[1];
-        // let mut c_val: u32 = hash_state[2];
-        // let mut d_val: u32 = hash_state[3];
-
         let mut slots = [hash_state[0], hash_state[1], hash_state[2], hash_state[3]];
 
         // Because we have 64 rotations, this will go round 64x per word-block
@@ -166,6 +161,11 @@ fn md5(raw_message: &str) -> String {
         hash_state[2] = hash_state[2].wrapping_add(slots[2]);
         hash_state[3] = hash_state[3].wrapping_add(slots[3]);
     }
+
+    hash_state[0] = hash_state[0].swap_bytes();
+    hash_state[1] = hash_state[1].swap_bytes();
+    hash_state[2] = hash_state[2].swap_bytes();
+    hash_state[3] = hash_state[3].swap_bytes();
 
     hash_state
         .iter()
@@ -247,28 +247,18 @@ mod tests {
 
     #[test]
     fn test_md5() {
-        // assert_eq!(md5("1"), "c4ca4238a0b923820dcc509a6f75849b");
+        assert_eq!(md5("1"), "c4ca4238a0b923820dcc509a6f75849b");
+        assert_eq!(md5(""), "d41d8cd98f00b204e9800998ecf8427e");
 
-        // assert_eq!(
-        //     md5("The quick brown fox jumps over the lazy dog"),
-        //     "9e107d9d372bb6826bd81d3542a419d6"
-        // );
-
-        // assert_eq!(
-        //     md5("The quick brown fox jumps over the lazy dog."),
-        //     "e4d909c290d0fb1ca068ffaddf22cbd0"
-        // );
-
-        // THIS ONE IS WRONG BUT CHARACTERIZATION
         assert_eq!(
-            md5(""),
-            "d98c1dd404b2008f980980e97e42f8ec",
-            "characterization failed"
+            md5("The quick brown fox jumps over the lazy dog"),
+            "9e107d9d372bb6826bd81d3542a419d6"
         );
+
         assert_eq!(
-            md5(""),
-            "d41d8cd98f00b204e9800998ecf8427e",
-            "reality failed"
+            md5("The quick brown fox jumps over the lazy dog."),
+            "e4d909c290d0fb1ca068ffaddf22cbd0"
         );
+
     }
 }
