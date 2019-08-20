@@ -5,26 +5,11 @@ use std::convert::TryInto;
 
 #[allow(clippy::cast_lossless, dead_code)]
 fn get_md5_k(index: u32) -> u32 {
+    // this is defined in the RTC as 1-indexed, so we send in index + 1
     let next_i = (index + 1) as f64;
     let value = next_i.sin().abs() as f64;
     (value * 4_294_967_296f64).floor() as u32
 }
-
-// fn get_md5_k(index: u32) -> u32 {
-//     [
-//         0x00000000, // enable use as a 1-indexed table
-//         0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613,
-//         0xfd469501, 0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193,
-//         0xa679438e, 0x49b40821, 0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d,
-//         0x02441453, 0xd8a1e681, 0xe7d3fbc8, 0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed,
-//         0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a, 0xfffa3942, 0x8771f681, 0x6d9d6122,
-//         0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70, 0x289b7ec6, 0xeaa127fa,
-//         0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665, 0xf4292244,
-//         0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
-//         0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb,
-//         0xeb86d391,
-//     ][index as usize]
-// }
 
 fn to_md5_word(chunk: &[char]) -> Vec<u32> {
     chunk
@@ -42,6 +27,24 @@ const SHIFTS: [usize; 64] = [
     21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
 ];
 
+struct ChunkState<'LifetimeType> {
+    pub word_i: usize,
+    // pub hash_state: [u32; 4],
+    pub word: &'LifetimeType Vec<u32>,
+}
+
+struct IterationState {
+    i: usize,
+    g: usize,
+    w_at_g: u32,
+    a: u32,
+    b: u32,
+    c: u32,
+    d: u32,
+    f: u32,
+    shift: u32,
+}
+
 #[allow(clippy::many_single_char_names, dead_code)]
 fn md5(raw_message: &str) -> String {
     let mut hash_state: [u32; 4] = [
@@ -54,23 +57,31 @@ fn md5(raw_message: &str) -> String {
     let message = preprocess_little_endian(raw_message.to_string());
     let blocks = message.chars().collect::<Vec<char>>();
 
-    for chunk in blocks.chunks_exact(BLOCK_SIZE).map(&to_md5_word) {
-        // println!("{:#?}", w);
+    for (word_i, word) in blocks
+        .chunks_exact(BLOCK_SIZE)
+        .map(&to_md5_word)
+        .enumerate()
+    {
+        let _chunk_state = ChunkState {
+            word_i,
+            word: &word,
+        };
 
-        assert_eq!(16, chunk.len());
+        assert_eq!(16, word.len());
 
         let mut a: u32 = hash_state[0];
         let mut b: u32 = hash_state[1];
         let mut c: u32 = hash_state[2];
         let mut d: u32 = hash_state[3];
 
-        for i in 0..=63 {
+        for i in 0usize..=63usize {
             let temp: u32;
             let f: u32;
-            let g: u32;
+            let g: usize;
 
             // bitwise & is commutative+associative, so we can reorder those
             match i {
+                // First 15 iterations use this, etc.
                 0..=15 => {
                     // F := (B and C) or ((not B) and D)
                     // g := i
@@ -108,8 +119,12 @@ fn md5(raw_message: &str) -> String {
             );
 
             let i_as_u32: u32 = i.try_into().unwrap();
-            let w_g: u32 = chunk[g as usize];
-            let s_i_as_u32: u32 = SHIFTS[i as usize].try_into().unwrap();
+
+            let value_of_word_at_g: u32 = word[g];
+
+            // we have to try-unwrap into a u32, because `u32::rotate_left`
+            // requires a u32 as the argument
+            let rotation_as_fn_of_i: u32 = SHIFTS[i].try_into().unwrap();
 
             temp = d;
             d = c;
@@ -120,12 +135,24 @@ fn md5(raw_message: &str) -> String {
                 f_value = f,
                 i_value = i_as_u32 + 1,
                 g_value = g,
-                w_at_g_value = w_g,
-                s_at_i_value = s_i_as_u32
+                w_at_g_value = value_of_word_at_g,
+                s_at_i_value = rotation_as_fn_of_i
             );
 
-            b = calc_b(a, b, f, i_as_u32, w_g, s_i_as_u32);
+            b = calc_b(a, b, f, i_as_u32, value_of_word_at_g, rotation_as_fn_of_i);
             a = temp;
+
+            let _iter_state = IterationState {
+                i,
+                w_at_g: value_of_word_at_g,
+                a,
+                b,
+                c,
+                d,
+                f,
+                g,
+                shift: rotation_as_fn_of_i,
+            };
 
             let after_hex_string = format!(
                 "after (hex):  [i = {}] A={:08x} B={:08x} C={:08x} D={:08x}",
