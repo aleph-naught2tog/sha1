@@ -10,6 +10,22 @@ fn get_md5_k(index: u32) -> u32 {
     (value * 4_294_967_296f64).floor() as u32
 }
 
+// fn get_md5_k(index: u32) -> u32 {
+//     [
+//         0x00000000, // enable use as a 1-indexed table
+//         0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613,
+//         0xfd469501, 0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193,
+//         0xa679438e, 0x49b40821, 0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d,
+//         0x02441453, 0xd8a1e681, 0xe7d3fbc8, 0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed,
+//         0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a, 0xfffa3942, 0x8771f681, 0x6d9d6122,
+//         0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70, 0x289b7ec6, 0xeaa127fa,
+//         0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665, 0xf4292244,
+//         0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+//         0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb,
+//         0xeb86d391,
+//     ][index as usize]
+// }
+
 fn to_md5_word(chunk: &[char]) -> Vec<u32> {
     chunk
         .chunks_exact(32)
@@ -20,15 +36,20 @@ fn to_md5_word(chunk: &[char]) -> Vec<u32> {
         .collect()
 }
 
+const SHIFTS: [usize; 64] = [
+    7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9,
+    14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15,
+    21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+];
+
 #[allow(clippy::many_single_char_names, dead_code)]
 fn md5(raw_message: &str) -> String {
-    let s: [usize; 64] = [
-        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5,
-        9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10,
-        15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+    let mut hash_state: [u32; 4] = [
+        0x6745_2301u32,
+        0xefcd_ab89u32,
+        0x98ba_dcfeu32,
+        0x1032_5476u32,
     ];
-
-    let mut hash_state: [u32; 4] = [0x6745_2301, 0xefcd_ab89, 0x98ba_dcfe, 0x1032_5476];
 
     let message = preprocess_little_endian(raw_message.to_string());
     let blocks = message.chars().collect::<Vec<char>>();
@@ -50,16 +71,17 @@ fn md5(raw_message: &str) -> String {
             let f: u32;
             let g: u32;
 
+            // bitwise & is commutative+associative, so we can reorder those
             match i {
                 0..=15 => {
                     // F := (B and C) or ((not B) and D)
-                    f = (b & c) | ((!b) & d);
+                    f = (b & c) | (!b & d);
                     // g := i
                     g = i;
                 }
                 16..=31 => {
                     // F := (D and B) or ((not D) and C)
-                    f = (d & b) | ((!d) & c);
+                    f = (b & d) | (c & !d);
                     // g := (5×i + 1) mod 16
                     g = (5 * i + 1) % 16;
                 }
@@ -71,32 +93,48 @@ fn md5(raw_message: &str) -> String {
                 }
                 48..=63 => {
                     // F := C xor (B or (not D))
-                    f = c ^ (b | (!d));
+                    f = c ^ (b | !d);
                     // g := (7×i) mod 16
                     g = (7 * i) % 16;
                 }
                 _ => panic!("Indexing broke"),
             }
 
-            println!(
-                "before: [i = {}] A={:x} B={:x} C={:x} D={:x}",
+            let before_hex_string = format!(
+                "before (hex): [i = {}] A={:08x} B={:08x} C={:08x} D={:08x}",
+                i, a, b, c, d
+            );
+            let before_dec_string = format!(
+                "before (dec): [i = {}] A={:10} B={:10} C={:10} D={:10}",
                 i, a, b, c, d
             );
 
             let i_as_u32: u32 = i.try_into().unwrap();
             let w_g: u32 = w[g as usize];
-            let s_i_as_u32: u32 = s[i as usize].try_into().unwrap();
+            let s_i_as_u32: u32 = SHIFTS[i as usize].try_into().unwrap();
 
             temp = d;
             d = c;
             c = b;
+
             b = calc_b(a, b, f, i_as_u32, w_g, s_i_as_u32);
             a = temp;
 
-            println!(
-                "after:  [i = {}] A={:x} B={:x} C={:x} D={:x}\n",
+            let after_hex_string = format!(
+                "after (hex):  [i = {}] A={:08x} B={:08x} C={:08x} D={:08x}",
                 i, a, b, c, d
             );
+
+            let after_dec_string = format!(
+                "after (dec):  [i = {}] A={:10} B={:10} C={:10} D={:10}",
+                i, a, b, c, d
+            );
+
+            println!("{}", before_hex_string);
+            println!("{}", after_hex_string);
+            println!("{}", before_dec_string);
+            println!("{}", after_dec_string);
+            println!("{}", "-".repeat(40));
         }
 
         hash_state[0] = hash_state[0].wrapping_add(a);
