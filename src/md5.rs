@@ -54,12 +54,10 @@ fn md5(raw_message: &str) -> String {
     let message = preprocess_little_endian(raw_message.to_string());
     let blocks = message.chars().collect::<Vec<char>>();
 
-    for chunk in blocks.chunks_exact(BLOCK_SIZE) {
-        let w: Vec<u32> = to_md5_word(chunk);
+    for chunk in blocks.chunks_exact(BLOCK_SIZE).map(&to_md5_word) {
+        // println!("{:#?}", w);
 
-        println!("{:#?}", w);
-
-        assert_eq!(16, w.len());
+        assert_eq!(16, chunk.len());
 
         let mut a: u32 = hash_state[0];
         let mut b: u32 = hash_state[1];
@@ -75,26 +73,26 @@ fn md5(raw_message: &str) -> String {
             match i {
                 0..=15 => {
                     // F := (B and C) or ((not B) and D)
-                    f = (b & c) | (!b & d);
                     // g := i
+                    f = (b & c) | (!b & d);
                     g = i;
                 }
                 16..=31 => {
                     // F := (D and B) or ((not D) and C)
-                    f = (b & d) | (c & !d);
                     // g := (5×i + 1) mod 16
+                    f = (b & d) | (c & !d);
                     g = (5 * i + 1) % 16;
                 }
                 32..=47 => {
                     // F := B xor C xor D
-                    f = b ^ c ^ d;
                     // g := (3×i + 5) mod 16
+                    f = b ^ c ^ d;
                     g = (3 * i + 5) % 16;
                 }
                 48..=63 => {
                     // F := C xor (B or (not D))
-                    f = c ^ (b | !d);
                     // g := (7×i) mod 16
+                    f = c ^ (b | !d);
                     g = (7 * i) % 16;
                 }
                 _ => panic!("Indexing broke"),
@@ -110,12 +108,21 @@ fn md5(raw_message: &str) -> String {
             );
 
             let i_as_u32: u32 = i.try_into().unwrap();
-            let w_g: u32 = w[g as usize];
+            let w_g: u32 = chunk[g as usize];
             let s_i_as_u32: u32 = SHIFTS[i as usize].try_into().unwrap();
 
             temp = d;
             d = c;
             c = b;
+
+            let calc_b_string = format!(
+                "f={f_value:08x}, g={g_value}, s@i={s_at_i_value}, i={i_value},  // w@g={w_at_g_value}",
+                f_value = f,
+                i_value = i_as_u32 + 1,
+                g_value = g,
+                w_at_g_value = w_g,
+                s_at_i_value = s_i_as_u32
+            );
 
             b = calc_b(a, b, f, i_as_u32, w_g, s_i_as_u32);
             a = temp;
@@ -130,6 +137,7 @@ fn md5(raw_message: &str) -> String {
                 i, a, b, c, d
             );
 
+            println!("{}", calc_b_string);
             println!("{}", before_hex_string);
             println!("{}", after_hex_string);
             println!("{}", before_dec_string);
