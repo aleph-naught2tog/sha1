@@ -21,14 +21,40 @@ fn to_md5_word(chunk: &[char]) -> Vec<u32> {
         .collect()
 }
 
-const ROTATIONS: [u32; 64] = [
-    7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9,
-    14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15,
-    21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
-];
+fn build_rotations() -> Vec<u32> {
+    std::iter::repeat([7u32, 12u32, 17u32, 22u32])
+        .take(4)
+        .collect::<Vec<[u32; 4]>>()
+        .iter()
+        .chain(
+            std::iter::repeat([5u32, 9u32, 14u32, 20u32])
+                .take(4)
+                .collect::<Vec<[u32; 4]>>()
+                .iter(),
+        )
+        .chain(
+            std::iter::repeat([4u32, 11u32, 16u32, 23u32])
+                .take(4)
+                .collect::<Vec<[u32; 4]>>()
+                .iter(),
+        )
+        .chain(
+            std::iter::repeat([6u32, 10u32, 15u32, 21u32])
+                .take(4)
+                .collect::<Vec<[u32; 4]>>()
+                .iter(),
+        )
+        .flatten()
+        .copied()
+        .collect::<Vec<u32>>()
+}
 
 #[allow(clippy::many_single_char_names, dead_code)]
 fn md5(raw_message: &str) -> String {
+    let rotations: Vec<u32> = build_rotations();
+
+    assert_eq!(64, rotations.len());
+
     let mut hash_state: [u32; 4] = [
         0x6745_2301u32,
         0xefcd_ab89u32,
@@ -42,14 +68,19 @@ fn md5(raw_message: &str) -> String {
     for word in message_as_chars.chunks_exact(BLOCK_SIZE).map(&to_md5_word) {
         assert_eq!(16, word.len());
 
-        let mut a: u32 = hash_state[0];
-        let mut b: u32 = hash_state[1];
-        let mut c: u32 = hash_state[2];
-        let mut d: u32 = hash_state[3];
+        let mut a_val: u32 = hash_state[0];
+        let mut b_val: u32 = hash_state[1];
+        let mut c_val: u32 = hash_state[2];
+        let mut d_val: u32 = hash_state[3];
 
-        for (i, rotation_as_fn_of_i) in ROTATIONS.iter().enumerate() {
-            let f: u32;
-            let g: usize;
+        // Because we have 64 rotations, this will go round 64x per word-block
+        for (i, rotation_as_fn_of_i) in rotations.iter().enumerate() {
+            // We calculate this value using bitwise ops, the selection of which
+            // is based in i (or rather on an array of 4 operations)
+            let f_as_value_from_i_picked_fn: u32;
+
+            // g is similarly index-based by array-of-4
+            let g_as_index_into_word: usize;
 
             // bitwise & is commutative+associative, so we can reorder those
             match i {
@@ -57,70 +88,64 @@ fn md5(raw_message: &str) -> String {
                 0..=15 => {
                     // F := (B and C) or ((not B) and D)
                     // g := i
-                    f = (b & c) | (!b & d);
-                    g = i;
+                    f_as_value_from_i_picked_fn = (b_val & c_val) | (!b_val & d_val);
+                    g_as_index_into_word = i;
                 }
+                // then the next 15...
                 16..=31 => {
                     // F := (D and B) or ((not D) and C)
                     // g := (5×i + 1) mod 16
-                    f = (b & d) | (c & !d);
-                    g = (5 * i + 1) % 16;
+                    f_as_value_from_i_picked_fn = (b_val & d_val) | (c_val & !d_val);
+                    g_as_index_into_word = (5 * i + 1) % 16;
                 }
                 32..=47 => {
                     // F := B xor C xor D
                     // g := (3×i + 5) mod 16
-                    f = b ^ c ^ d;
-                    g = (3 * i + 5) % 16;
+                    f_as_value_from_i_picked_fn = b_val ^ c_val ^ d_val;
+                    g_as_index_into_word = (3 * i + 5) % 16;
                 }
                 48..=63 => {
                     // F := C xor (B or (not D))
                     // g := (7×i) mod 16
-                    f = c ^ (b | !d);
-                    g = (7 * i) % 16;
+                    f_as_value_from_i_picked_fn = c_val ^ (b_val | !d_val);
+                    g_as_index_into_word = (7 * i) % 16;
                 }
                 _ => panic!("Indexing broke"),
             }
 
+            // `try_into.unwrap` is us saying "no seriously, this is totally not
+            // bigger than a u32 I promise be nice"
             let i_as_u32: u32 = i.try_into().unwrap();
 
-            let value_of_word_at_g: u32 = word[g];
+            let value_of_word_at_g: u32 = word[g_as_index_into_word];
+            println!("value - {}", value_of_word_at_g);
 
-            let temp = d;
-            d = c;
-            c = b;
+            // we "reorder" every iteration
+            // fuck temp variables, temp ALL THE VARIABLES
+            // WE HAVE THE MEMORY
+            let d_before_swap = d_val;
+            let c_before_swap = c_val;
+            let b_before_swap = b_val;
+            let a_before_swap = a_val;
 
-            let calc_b_string = format!(
-                "f={f_value:08x}, g={g_value}, s@i={s_at_i_value}, i={i_value},  // w@g={w_at_g_value}",
-                f_value = f,
-                i_value = i_as_u32 + 1,
-                g_value = g,
-                w_at_g_value = value_of_word_at_g,
-                s_at_i_value = rotation_as_fn_of_i
+            d_val = c_before_swap; // @2 -> @3
+            c_val = b_before_swap; // @1 -> @2
+            a_val = d_before_swap; // @3 -> @0
+
+            b_val = calc_b(
+                a_before_swap,
+                b_before_swap,
+                f_as_value_from_i_picked_fn,
+                i_as_u32,
+                value_of_word_at_g,
+                *rotation_as_fn_of_i,
             );
-
-            b = calc_b(a, b, f, i_as_u32, value_of_word_at_g, *rotation_as_fn_of_i);
-            a = temp;
-
-            let after_hex_string = format!(
-                "after (hex):  [i = {}] A={:08x} B={:08x} C={:08x} D={:08x}",
-                i, a, b, c, d
-            );
-
-            let after_dec_string = format!(
-                "after (dec):  [i = {}] A={:10} B={:10} C={:10} D={:10}",
-                i, a, b, c, d
-            );
-
-            println!("{}", calc_b_string);
-            println!("{}", after_hex_string);
-            println!("{}", after_dec_string);
-            println!("{}", "-".repeat(40));
         }
 
-        hash_state[0] = hash_state[0].wrapping_add(a);
-        hash_state[1] = hash_state[1].wrapping_add(b);
-        hash_state[2] = hash_state[2].wrapping_add(c);
-        hash_state[3] = hash_state[3].wrapping_add(d);
+        hash_state[0] = hash_state[0].wrapping_add(a_val);
+        hash_state[1] = hash_state[1].wrapping_add(b_val);
+        hash_state[2] = hash_state[2].wrapping_add(c_val);
+        hash_state[3] = hash_state[3].wrapping_add(d_val);
     }
 
     hash_state
@@ -178,7 +203,7 @@ mod tests {
         assert_eq!(128, only_block[0]);
     }
 
-    // #[test]
+    #[test]
     fn test_md5() {
         // assert_eq!(md5("1"), "c4ca4238a0b923820dcc509a6f75849b");
 
