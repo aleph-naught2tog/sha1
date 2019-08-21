@@ -1,4 +1,5 @@
 mod md5;
+
 mod utils;
 
 use crate::utils::preprocess;
@@ -148,11 +149,19 @@ mod tests {
     }
 
     #[test]
-    fn lazy_dog_test() {
-        let input = "The quick brown fox jumps over the lazy dog";
-        let output = sha1(input);
+    fn test_md5() {
+        assert_eq!(md5::md5("1"), "c4ca4238a0b923820dcc509a6f75849b");
+        assert_eq!(md5::md5(""), "d41d8cd98f00b204e9800998ecf8427e");
 
-        assert_eq!("2fd4e1c67a2d28fced849ee1bb76e7391b93eb12", output);
+        assert_eq!(
+            md5::md5("The quick brown fox jumps over the lazy dog"),
+            "9e107d9d372bb6826bd81d3542a419d6"
+        );
+
+        assert_eq!(
+            md5::md5("The quick brown fox jumps over the lazy dog."),
+            "e4d909c290d0fb1ca068ffaddf22cbd0"
+        );
     }
 
 }

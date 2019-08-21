@@ -3,6 +3,9 @@ use crate::utils::preprocess_little_endian;
 use crate::utils::BLOCK_SIZE;
 use std::convert::TryInto;
 
+mod state;
+use state::State;
+
 fn round_0_op(b_val: u32, c_val: u32, d_val: u32) -> u32 {
     (b_val & c_val) | (!b_val & d_val)
 }
@@ -67,7 +70,8 @@ fn to_md5_words(chunk: &[char]) -> Vec<u32> {
         .chunks_exact(32)
         .map(|block| {
             let int_bits = block.iter().collect::<String>();
-            u32::from_be(u32::from_str_radix(&int_bits, 2).unwrap())
+            let value = u32::from_str_radix(&int_bits, 2).unwrap();
+            u32::from_be(value)
         })
         .collect()
 }
@@ -100,23 +104,29 @@ fn build_rotations() -> Vec<u32> {
         .collect::<Vec<u32>>()
 }
 
-#[allow(clippy::many_single_char_names, dead_code)]
-fn md5(raw_message: &str) -> String {
-    let operations = [round_0_op, round_1_op, round_2_op, round_3_op];
+pub fn md5(raw_message: &str) -> String {
+    let should_debug = std::env::var("SHOULD_DEBUG").is_ok();
 
-    let rotations: Vec<u32> = build_rotations();
-
-    let mut hash_state: [u32; 4] = [
+    const INITIAL_HASH_STATE: [u32; 4] = [
         0x6745_2301u32,
         0xefcd_ab89u32,
         0x98ba_dcfeu32,
         0x1032_5476u32,
     ];
 
+    const OPERATIONS: [fn(u32, u32, u32) -> u32; 4] =
+        [round_0_op, round_1_op, round_2_op, round_3_op];
+
+    let rotations: Vec<u32> = build_rotations();
+
+    let mut hash_state: [u32; 4] = INITIAL_HASH_STATE;
+
     let message = preprocess_little_endian(raw_message.to_string());
     let message_as_chars = message.chars().collect::<Vec<char>>();
 
     assert_eq!(0, message_as_chars.len() % BLOCK_SIZE);
+
+    let mut state = State::new(hash_state);
 
     for chunk in message_as_chars.chunks_exact(BLOCK_SIZE) {
         // Each chunk is 512 bits
@@ -126,23 +136,17 @@ fn md5(raw_message: &str) -> String {
         // 16 * 32 = 512, hence our 16 words for enumeration.
         assert_eq!(16, words.len());
 
-        let mut slots = [
-            hash_state[0], // A
-            hash_state[1], // B
-            hash_state[2], // C
-            hash_state[3], // D
-        ];
-
-        // just for debugging purposes
-        let mut slot_names = ["A", "B", "C", "D"];
-
         // Because we have 64 rotations, this will go round 64x per words-block
         for (index, rotation) in rotations.iter().enumerate() {
             // --- varies over index, invariant over message ---
             // both our operation and how we index into the word are based on an
             // array of four values
             let round_index = (index / 16usize) % 4usize;
-            let operation = operations[round_index];
+            if should_debug && index % 16 == 0 {
+                println!("\nRound {}", round_index + 1);
+            }
+
+            let operation = OPERATIONS[round_index];
             let word_index: usize = match round_index {
                 0 => index,
                 1 => (5 * index + 1) % 16,
@@ -151,20 +155,24 @@ fn md5(raw_message: &str) -> String {
                 _ => panic!("Indexing broke"),
             };
 
+            state.index = index;
+            state.round_index = round_index;
+            state.word_index = word_index;
+            state.word_index_one = state.word_index + 1;
+
             // `try_into.unwrap` is us saying "no seriously, this is totally not
             // bigger than a u32 I promise be nice"
             // since `i` varies between 0 and 63, that's a solid bet
             let constant = get_md5_k(index.try_into().unwrap());
+            state.constant = constant;
 
             // --- variant over message ---
-            // THIS IS LITTLE-ENDIAN
-            // a 32-bit block of the message input
             let word: u32 = words[word_index];
 
-            let operation_result = operation(slots[1], slots[2], slots[3]);
+            let operation_result = operation(state.slots[1], state.slots[2], state.slots[3]);
 
             let intermediate_value = operation_result
-                .wrapping_add(slots[0])
+                .wrapping_add(state.slots[0])
                 .wrapping_add(constant)
                 .wrapping_add(word)
                 .rotate_left(*rotation);
@@ -180,44 +188,25 @@ fn md5(raw_message: &str) -> String {
             (this is also why some impls look like they assign the
             calculated value to `b` and others to `a`)
             */
-            slots[0] = slots[1].wrapping_add(intermediate_value);
+            state.slots[0] = state.slots[1].wrapping_add(intermediate_value);
 
-            let debug_message = format!(
-                "Applying [{name_0}{name_1}{name_2}{name_3}  {word_i:>2}  {rot:>2}  {i_plus_1:>2}]: A={slot_0:08X} B={slot_1:08X} C={slot_2:08X} D={slot_3:08X} T[0]={k_value:08X}",
-                name_0 = slot_names[0],
-                name_1 = slot_names[1],
-                name_2 = slot_names[2],
-                name_3 = slot_names[3],
-                word_i = word_index,
-                rot = rotation,
-                i_plus_1 = index + 1,
-                slot_0 = slots[0],
-                slot_1 = slots[1],
-                slot_2 = slots[2],
-                slot_3 = slots[3],
-                k_value = constant);
-
-            println!("{}", debug_message);
+            if should_debug {
+                state.pretty_print();
+            }
 
             // rotate names after we print
-            slots.rotate_right(1);
-            slot_names.rotate_right(1);
+            state.rotate_right();
         }
 
-        hash_state[0] = hash_state[0].wrapping_add(slots[0]);
-        hash_state[1] = hash_state[1].wrapping_add(slots[1]);
-        hash_state[2] = hash_state[2].wrapping_add(slots[2]);
-        hash_state[3] = hash_state[3].wrapping_add(slots[3]);
+        hash_state[0] = hash_state[0].wrapping_add(state.slots[0]);
+        hash_state[1] = hash_state[1].wrapping_add(state.slots[1]);
+        hash_state[2] = hash_state[2].wrapping_add(state.slots[2]);
+        hash_state[3] = hash_state[3].wrapping_add(state.slots[3]);
     }
-
-    hash_state[0] = hash_state[0].swap_bytes();
-    hash_state[1] = hash_state[1].swap_bytes();
-    hash_state[2] = hash_state[2].swap_bytes();
-    hash_state[3] = hash_state[3].swap_bytes();
 
     hash_state
         .iter()
-        .flat_map(|value| to_hex_string(*value))
+        .flat_map(|value| to_hex_string(u32::from_be(*value)))
         .collect::<String>()
 }
 
@@ -232,80 +221,28 @@ mod tests {
     }
 
     #[test]
-    fn test_to_md5_word() {
+    fn test_to_md5_word_short() {
         let raw_message = "1";
         let message = preprocess_little_endian(raw_message.to_string());
         let blocks = message.chars().collect::<Vec<char>>();
         let block = blocks.chunks_exact(BLOCK_SIZE).next().unwrap();
         let res = to_md5_words(block);
         assert_eq!(32817, *res.get(0).unwrap());
-        assert_eq!(8, *res.get(14).unwrap());
+        assert_eq!(raw_message.len() as u32 * 8u32, *res.get(14).unwrap());
     }
 
     #[test]
-    fn test_empty_string() {
-        // basis: https://rosettacode.org/wiki/MD5/Implementation_Debug for ""
-        let input = "";
-        let message = preprocess_little_endian(input.to_string());
-        let message_as_chars = message.chars().collect::<Vec<char>>();
-        assert_eq!(512, message_as_chars.len());
-
-        let mut blocks = message_as_chars.chunks_exact(BLOCK_SIZE).map(&to_md5_words);
-        assert_eq!(1, blocks.len());
-
-        let only_block = blocks.next().unwrap();
-
-        assert_eq!(128, only_block[0]);
+    fn test_to_md5_word_long() {
+        let raw_message = "The";
+        let message = preprocess_little_endian(raw_message.to_string());
+        let blocks = message.chars().collect::<Vec<char>>();
+        let block = blocks.chunks_exact(BLOCK_SIZE).next().unwrap();
+        let res = to_md5_words(block);
+        assert_eq!(2_154_129_492, *res.get(0).unwrap());
+        assert_eq!(
+            raw_message.as_bytes().len() as u32 * 8u32,
+            *res.get(14).unwrap()
+        );
     }
 
-    #[allow(non_snake_case, clippy::unreadable_literal)]
-    #[test]
-    fn test_ops() {
-        // these defs come from an example Rust impl
-        let f = |x: u32, y: u32, z: u32| -> u32 { x & y | !x & z };
-        let g = |x: u32, y: u32, z: u32| -> u32 { x & z | y & !z };
-        let h = |x: u32, y: u32, z: u32| -> u32 { x ^ y ^ z };
-        let i = |x: u32, y: u32, z: u32| -> u32 { y ^ (x | !z) };
-
-        // just a big bunch of random values
-        let values: Vec<u32> = vec![
-            3188615988, 695841496, 2216164062, 4132908602, 535119995, 3476992632, 4108338822,
-            3771368763, 1763960359, 2847101384, 780277327, 707972203, 3866577126, 3254757686,
-            3876623650, 2341751893, 852600694, 2195646517, 2645321974, 304583403, 3700534932,
-            523776973, 2084116420, 2125555861, 544439779, 3895293508, 3069408009, 3969418735,
-            3107684498, 2211572384,
-        ];
-
-        for set in values.chunks_exact(3) {
-            match set {
-                [x_ref, y_ref, z_ref] => {
-                    let x = *x_ref;
-                    let y = *y_ref;
-                    let z = *z_ref;
-
-                    assert_eq!(round_0_op(x, y, z), f(x, y, z));
-                    assert_eq!(round_1_op(x, y, z), g(x, y, z));
-                    assert_eq!(round_2_op(x, y, z), h(x, y, z));
-                    assert_eq!(round_3_op(x, y, z), i(x, y, z));
-                }
-                _ => break,
-            }
-        }
-    }
-
-    #[test]
-    fn test_md5() {
-        // assert_eq!(md5("1"), "c4ca4238a0b923820dcc509a6f75849b");
-        assert_eq!(md5(""), "d41d8cd98f00b204e9800998ecf8427e");
-
-        // assert_eq!(
-        //     md5("The quick brown fox jumps over the lazy dog"),
-        //     "9e107d9d372bb6826bd81d3542a419d6"
-        // );
-
-        // assert_eq!(
-        //     md5("The quick brown fox jumps over the lazy dog."),
-        //     "e4d909c290d0fb1ca068ffaddf22cbd0"
-        // );
-    }
 }
