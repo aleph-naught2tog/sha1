@@ -1,9 +1,24 @@
+#![allow(clippy::unreadable_literal, clippy::many_single_char_names)]
+
 mod md5;
+mod sha2;
 
 mod utils;
 
 use crate::utils::preprocess;
+use crate::utils::to_hex_string;
 use crate::utils::BLOCK_SIZE;
+
+pub fn demo() {
+    let inputs: [&str; 4] = ["", "1", "abc", "The quick brown fox jumps over the lazy dog"];
+
+    for raw_message in inputs.iter() {
+        println!("Raw: {}", raw_message);
+        println!("  MD5: {}", md5::md5(raw_message));
+        println!("  SHA1: {}", sha1(raw_message));
+        println!("  SHA256: {}", sha2::sha256(raw_message));
+    }
+}
 
 const K: [u32; 4] = [0x5A82_7999, 0x6ED9_EBA1, 0x8F1B_BCDC, 0xCA62_C1D6];
 fn get_k(index: usize) -> u32 {
@@ -21,7 +36,7 @@ fn calculate_f(index: usize, b: u32, c: u32, d: u32) -> u32 {
 
 // chunk : &[char]
 // so a slice of that is &[&[char]]
-pub fn get_upcoming_block(chunk: &[char]) -> Vec<u32> {
+fn get_upcoming_block(chunk: &[char]) -> Vec<u32> {
     // chunks_exact is on a slice and returns slices
     // but then we gather those up into a vec
     // which is how we end up with Vec<&[char]>
@@ -130,10 +145,6 @@ pub fn sha1(raw_message: &str) -> String {
         .iter()
         .flat_map(|value| to_hex_string(*value))
         .collect::<String>()
-}
-
-fn to_hex_string(value: u32) -> Vec<char> {
-    format!("{:08x}", value).chars().collect::<Vec<char>>()
 }
 
 #[cfg(test)]

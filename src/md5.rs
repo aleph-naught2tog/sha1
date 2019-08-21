@@ -1,4 +1,6 @@
-use crate::to_hex_string;
+// #![allow(clippy::unreadable_literal)]
+
+use crate::utils::to_hex_string;
 use crate::utils::preprocess_little_endian;
 use crate::utils::BLOCK_SIZE;
 use std::convert::TryInto;

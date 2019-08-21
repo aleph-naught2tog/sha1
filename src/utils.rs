@@ -5,6 +5,10 @@ pub fn calc_zero_padding(length: usize) -> usize {
     (BLOCK_SIZE - LENGTH_OF_LENGTH_STR - length - 1) % BLOCK_SIZE
 }
 
+pub fn to_hex_string(value: u32) -> Vec<char> {
+    format!("{:08x}", value).chars().collect::<Vec<char>>()
+}
+
 /// The goal with preprocessing the message is to get a series of blocks to
 /// operate on, each of which is 512 bits in length.
 ///
